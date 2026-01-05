@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mappa (test avvio)</title>
+  <style>
+    :root { --bg:#f6f7fb; --grid:rgba(0,0,0,.06); --ink:#1a1a1a; }
+    html, body { height:100%; margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; color:var(--ink); }
+    #app { height:100%; display:grid; grid-template-rows:auto 1fr; }
+
+    header{
+      display:flex; gap:10px; flex-wrap:wrap; align-items:center; padding:10px 12px;
+      background:#fff; border-bottom:1px solid rgba(0,0,0,.08);
+      position:sticky; top:0; z-index:10;
+    }
+    .btn{
+      border:1px solid rgba(0,0,0,.18); background:#fff; border-radius:10px;
+      padding:7px 10px; cursor:pointer; font-size:13px; user-select:none; white-space:nowrap;
+    }
+    .btn:hover{ background:#f7f7f7; }
+    .btn.active{
+      border-color: rgba(0,120,255,.55);
+      box-shadow: 0 0 0 3px rgba(0,120,255,.18);
+    }
+    .btn.danger{ border-color: rgba(200,0,0,.28); }
+    .btn.danger:hover{ background: rgba(200,0,0,.06); }
+
+    .hint{ font-size:13px; opacity:.75; flex: 1 1 520px; }
+    kbd{
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size:12px; border:1px solid rgba(0,0,0,.2); border-bottom-width:2px;
+      padding:1px 6px; border-radius:6px; background:#fafafa;
+    }
+    .status{ margin-left:auto; font-size:13px; opacity:.9; white-space:nowrap; }
+
+    #board{
+      position:relative; overflow:hidden;
+      background:
+        linear-gradient(var(--bg), var(--bg)),
+        repeating-linear-gradient(0deg, transparent, transparent 23px, var(--grid) 24px),
+        repeating-linear-gradient(90deg, transparent, transparent 23px, var(--grid) 24px);
+    }
+
+    svg{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+
+    .pop{
+      position:absolute; width:20ch; max-width:48ch; background:#fff;
+      border:1px solid rgba(0,0,0,.55); border-radius:14px;
+      box-shadow:0 8px 24px rgba(0,0,0,.10);
+      padding:10px; box-sizing:border-box;
+      user-select:none; cursor:grab;
+      display:flex; align-items:center; justify-content:center;
+    }
+    .pop:active{ cursor:grabbing; }
+    .pop.selected{ outline:3px solid rgba(0,120,255,.25); }
+    .pop.linking{ background:rgba(0,120,255,.08)!important; border-color:rgba(0,120,255,.35)!important; }
+
+    .body{
+      width:100%;
+      border:0; outline:0; resize:none; overflow:hidden;
+      background:transparent; color:inherit;
+      font-size:14px; line-height:1.25;
+      padding:0; margin:0; box-sizing:border-box;
+      min-height:1.25em;
+      white-space:pre-wrap; word-break:break-word;
+      text-align:center;
+    }
+
+    .linkLine{
+      pointer-events:stroke; cursor:pointer;
+      stroke: rgba(0,0,0,.55); stroke-width: 2; stroke-linecap: round;
+    }
+    .linkLine.selected{ stroke: rgba(0,120,255,.85); stroke-width: 3; }
+
+    .ghost{
+      position:absolute; inset:0; pointer-events:none;
+      display:flex; align-items:center; justify-content:center;
+      font-size:14px; opacity:.55;
+    }
+
+    @media print {
+      header { display:none !important; }
+      #board { background:#fff !important; overflow:visible !important; }
+      .ghost { display:none !important; }
+    }
+  </style>
+</head>
+
+<body>
+<div id="app">
+  <header>
+    <button class="btn" id="btnNew">+ Nuovo pop</button>
+    <button class="btn" id="btnLink">Collega</button>
+    <button class="btn danger" id="btnDelete">Elimina</button>
+
+    <button class="btn" id="btnPdf">Esporta PDF</button>
+    <button class="btn" id="btnExportJson">Esporta JSON</button>
+    <button class="btn" id="btnExportHtml">Esporta HTML</button>
+    <button class="btn" id="btnImport">Importa</button>
+    <input id="fileInput" type="file" accept=".json,.html" style="display:none" />
+
+    <span class="hint">
+      Doppio click = crea • Trascina = sposta • <kbd>L</kbd>/Collega = collega • click linea = seleziona • <kbd>CANC</kbd>/Elimina = elimina • <kbd>ESC</kbd> = annulla
+    </span>
+    <span class="status" id="status">Avvio…</span>
+  </header>
+
+  <div id="board">
+    <svg id="wires"></svg>
+    <div class="ghost">Doppio click sullo sfondo per creare un pop</div>
+  </div>
+</div>
+
+<script>
+/* RUN IMMEDIATELY: niente DOMContentLoaded, nessuna dipendenza da piattaforme */
+(function () {
+  const statusEl = document.getElementById('status');
+  function setStatus(msg){ statusEl.textContent = msg; }
+
+  try {
+    // Se NON vedi questo alert => JS non sta girando / è bloccato / <script> rimosso
+    alert("JS avviato ✅ (se vedi questo, lo script gira)");
+
+    setStatus("JS OK");
+
+    const board = document.getElementById('board');
+    const svg = document.getElementById('wires');
+
+    const btnNew = document.getElementById('btnNew');
+    const btnLink = document.getElementById('btnLink');
+    const btnDelete = document.getElementById('btnDelete');
+
+    const btnPdf = document.getElementById('btnPdf');
+    const btnExportJson = document.getElementById('btnExportJson');
+    const btnExportHtml = document.getElementById('btnExportHtml');
+    const btnImport = document.getElementById('btnImport');
+    const fileInput = document.getElementById('fileInput');
+
+    let pops = [];
+    let links = [];
+    let selectedBoxId = null;
+    let selectedLinkId = null;
+    let linkingFrom = null;
+
+    const uid = () => Math.random().toString(36).slice(2, 10);
+    const boardRect = () => board.getBoundingClientRect();
+
+    function clampToBoard(x, y) {
+      const r = boardRect();
+      const maxX = r.width - 260;
+      const maxY = r.height - 160;
+      return { x: Math.max(8, Math.min(x, maxX)), y: Math.max(8, Math.min(y, maxY)) };
+    }
+
+    function clearSelections() {
+      selectedBoxId = null; selectedLinkId = null;
+      document.querySelectorAll('.pop').forEach(el => el.classList.remove('selected'));
+      document.querySelectorAll('.linkLine').forEach(el => el.classList.remove('selected'));
+    }
+
+    function selectBox(id) {
+      selectedBoxId = id; selectedLinkId = null;
+      document.querySelectorAll('.pop').forEach(el => el.classList.toggle('selected', el.dataset.id === id));
+      document.querySelectorAll('.linkLine').forEach(el => el.classList.remove('selected'));
+    }
+
+    function selectLink(id) {
+      selectedLinkId = id; selectedBoxId = null;
+      document.querySelectorAll('.linkLine').forEach(el => el.classList.toggle('selected', el.dataset.linkid === id));
+      document.querySelectorAll('.pop').forEach(el => el.classList.remove('selected'));
+    }
+
+    function setLinkMode(on) {
+      if (on) {
+        if (!selectedBoxId) { setStatus('Seleziona un box prima di collegare.'); return; }
+        linkingFrom = selectedBoxId;
+        btnLink.classList.add('active');
+        document.querySelectorAll('.pop').forEach(el => el.classList.toggle('linking', el.dataset.id === linkingFrom));
+        setStatus('Collega: clicca un altro box.');
+      } else {
+        linkingFrom = null;
+        btnLink.classList.remove('active');
+        document.querySelectorAll('.pop').forEach(el => el.classList.remove('linking'));
+        setStatus('JS OK');
+      }
+    }
+
+    function createPop(x, y) {
+      const p = { id: uid(), x, y, text: '' };
+      pops.push(p);
+      render();
+      selectBox(p.id);
+    }
+
+    function addLink(from, to) {
+      if (!from || !to || from === to) return;
+      if (links.some(l => l.from === from && l.to === to)) return;
+      links.push({ id: uid(), from, to });
+    }
+
+    function deleteSelected() {
+      if (selectedLinkId) {
+        links = links.filter(l => l.id !== selectedLinkId);
+        selectedLinkId = null;
+        renderLinks();
+        setStatus('Collegamento eliminato.');
+        return;
+      }
+      if (selectedBoxId) {
+        const id = selectedBoxId;
+        pops = pops.filter(p => p.id !== id);
+        links = links.filter(l => l.from !== id && l.to !== id);
+        selectedBoxId = null;
+        if (linkingFrom === id) setLinkMode(false);
+        render();
+        setStatus('Box eliminato.');
+        return;
+      }
+      setStatus('Nessuna selezione.');
+    }
+
+    function autoGrow(ta) {
+      ta.style.height = 'auto';
+      ta.style.height = ta.scrollHeight + 'px';
+    }
+
+    function getPopBoxInBoardCoords(id) {
+      const el = document.querySelector(`.pop[data-id="${id}"]`);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const br = boardRect();
+      const x = r.left - br.left;
+      const y = r.top  - br.top;
+      return { cx: x + r.width/2, cy: y + r.height/2, hw: r.width/2, hh: r.height/2 };
+    }
+
+    function edgePoint(cx, cy, hw, hh, dx, dy) {
+      if (dx === 0 && dy === 0) return { x: cx, y: cy };
+      const tx = Math.abs(dx) / hw;
+      const ty = Math.abs(dy) / hh;
+      const t = 1 / Math.max(tx, ty);
+      return { x: cx + dx * t, y: cy + dy * t };
+    }
+
+    function renderLinks() {
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      const NS = "http://www.w3.org/2000/svg";
+
+      const defs = document.createElementNS(NS, "defs");
+      const marker = document.createElementNS(NS, "marker");
+      marker.setAttribute("id", "arrow");
+      marker.setAttribute("viewBox", "0 0 10 10");
+      marker.setAttribute("refX", "9");
+      marker.setAttribute("refY", "5");
+      marker.setAttribute("markerWidth", "7");
+      marker.setAttribute("markerHeight", "7");
+      marker.setAttribute("orient", "auto");
+      marker.setAttribute("markerUnits", "strokeWidth");
+
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+      path.setAttribute("fill", "rgba(0,0,0,.55)");
+      marker.appendChild(path);
+      defs.appendChild(marker);
+      svg.appendChild(defs);
+
+      links.forEach(l => {
+        const A = getPopBoxInBoardCoords(l.from);
+        const B = getPopBoxInBoardCoords(l.to);
+        if (!A || !B) return;
+
+        const dx = B.cx - A.cx;
+        const dy = B.cy - A.cy;
+
+        const p1 = edgePoint(A.cx, A.cy, A.hw, A.hh, dx, dy);
+        const p2 = edgePoint(B.cx, B.cy, B.hw, B.hh, -dx, -dy);
+
+        const line = document.createElementNS(NS, "line");
+        line.setAttribute("x1", p1.x);
+        line.setAttribute("y1", p1.y);
+        line.setAttribute("x2", p2.x);
+        line.setAttribute("y2", p2.y);
+        line.setAttribute("marker-end", "url(#arrow)");
+        line.classList.add('linkLine');
+        line.dataset.linkid = l.id;
+        if (l.id === selectedLinkId) line.classList.add('selected');
+
+        line.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          setLinkMode(false);
+          selectLink(l.id);
+          setStatus('Link selezionato.');
+        });
+
+        svg.appendChild(line);
+      });
+    }
+
+    function render() {
+      board.querySelectorAll('.pop').forEach(n => n.remove());
+      const ghost = board.querySelector('.ghost');
+      if (ghost) ghost.style.display = pops.length ? 'none' : 'flex';
+
+      pops.forEach(p => {
+        const el = document.createElement('div');
+        el.className = 'pop';
+        el.dataset.id = p.id;
+        el.style.left = p.x + 'px';
+        el.style.top = p.y + 'px';
+
+        el.innerHTML = `<textarea class="body" spellcheck="false"></textarea>`;
+        const ta = el.querySelector('.body');
+        ta.value = p.text || '';
+        autoGrow(ta);
+
+        if (p.id === selectedBoxId) el.classList.add('selected');
+        if (p.id === linkingFrom) el.classList.add('linking');
+
+        ta.addEventListener('focus', () => selectBox(p.id));
+        ta.addEventListener('mousedown', (e) => {
+          selectBox(p.id);
+          if (linkingFrom && linkingFrom !== p.id) e.preventDefault();
+        });
+
+        ta.addEventListener('input', (e) => {
+          p.text = e.target.value;
+          autoGrow(ta);
+          renderLinks();
+        });
+
+        el.addEventListener('click', () => {
+          if (linkingFrom && linkingFrom !== p.id) {
+            addLink(linkingFrom, p.id);
+            setLinkMode(false);
+            renderLinks();
+            setStatus('Collegamento creato.');
+          }
+        });
+
+        // drag solo fuori textarea
+        let dragging = false, sx=0, sy=0, ox=0, oy=0;
+
+        el.addEventListener('mousedown', (e) => {
+          if (e.button !== 0) return;
+          if (e.target.tagName.toLowerCase() === 'textarea') return;
+
+          e.stopPropagation();
+          setLinkMode(false);
+          selectBox(p.id);
+
+          dragging = true;
+          sx = e.clientX; sy = e.clientY;
+          ox = p.x; oy = p.y;
+
+          const onMove = (ev) => {
+            if (!dragging) return;
+            const dx = ev.clientX - sx;
+            const dy = ev.clientY - sy;
+            const pos = clampToBoard(ox + dx, oy + dy);
+            p.x = pos.x; p.y = pos.y;
+            el.style.left = p.x + 'px';
+            el.style.top = p.y + 'px';
+            renderLinks();
+          };
+
+          const onUp = () => {
+            dragging = false;
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+          };
+
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        });
+
+        board.appendChild(el);
+      });
+
+      renderLinks();
+    }
+
+    // --- export/import/pdf (minimi e affidabili) ---
+    function getState(){
+      return { version:1, createdAt:new Date().toISOString(), pops, links };
+    }
+    function downloadBlob(name, blob){
+      const a = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    function exportJSON(){
+      const blob = new Blob([JSON.stringify(getState(), null, 2)], {type:'application/json;charset=utf-8'});
+      const name = 'mappa_' + new Date().toISOString().slice(0,19).replaceAll(':','-') + '.json';
+      downloadBlob(name, blob);
+      setStatus('Esportato JSON.');
+    }
+    function exportHTML(){
+      const json = JSON.stringify(getState(), null, 2).replaceAll('</script>', '<\\/script>');
+      const html = `<!doctype html><html lang="it"><head><meta charset="utf-8"/><title>Mappa esportata</title></head>
+<body><h3>Mappa esportata</h3><script id="popplet_export_data" type="application/json">\n${json}\n</script></body></html>`;
+      const blob = new Blob([html], {type:'text/html;charset=utf-8'});
+      const name = 'mappa_' + new Date().toISOString().slice(0,19).replaceAll(':','-') + '.html';
+      downloadBlob(name, blob);
+      setStatus('Esportato HTML.');
+    }
+    function parseImportedText(text){
+      const t = (text||'').trim();
+      if (t.startsWith('{') || t.startsWith('[')) return JSON.parse(t);
+      const re = /<script[^>]*id=["']popplet_export_data["'][^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i;
+      const m = text.match(re);
+      if (!m) throw new Error('File non riconosciuto');
+      return JSON.parse(m[1]);
+    }
+    function applyState(state){
+      if (!state || !state.pops || !state.links) throw new Error('Dati incompleti');
+      pops = state.pops; links = state.links;
+      clearSelections(); setLinkMode(false); render();
+      setStatus('Import OK.');
+    }
+    function doImport(){
+      fileInput.value = '';
+      fileInput.click();
+    }
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const state = parseImportedText(text);
+        applyState(state);
+      } catch(err){
+        console.error(err);
+        setStatus('Errore import.');
+        alert('Import fallito: usa un file esportato da questa app (JSON/HTML).');
+      }
+    });
+
+    // --- eventi UI ---
+    btnNew.addEventListener('click', () => {
+      const r = boardRect();
+      createPop(20 + Math.random()*(r.width-260), 20 + Math.random()*(r.height-160));
+    });
+    btnLink.addEventListener('click', () => setLinkMode(!linkingFrom));
+    btnDelete.addEventListener('click', deleteSelected);
+    btnPdf.addEventListener('click', () => { setStatus('Stampa: Salva come PDF'); window.print(); });
+    btnExportJson.addEventListener('click', exportJSON);
+    btnExportHtml.addEventListener('click', exportHTML);
+    btnImport.addEventListener('click', doImport);
+
+    board.addEventListener('mousedown', (e) => {
+      if (e.target === board) { clearSelections(); setLinkMode(false); setStatus('JS OK'); }
+    });
+    board.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.pop')) return;
+      const br = boardRect();
+      const pos = clampToBoard(e.clientX - br.left, e.clientY - br.top);
+      createPop(pos.x, pos.y);
+    });
+
+    window.addEventListener('keydown', (e) => {
+      const key = (e.key || '').toLowerCase();
+      if (key === 'delete' || key === 'backspace') {
+        const active = document.activeElement;
+        const inEditor = active && active.tagName === 'TEXTAREA';
+        if (!inEditor) { e.preventDefault(); deleteSelected(); }
+      }
+      if (key === 'l') { linkingFrom ? setLinkMode(false) : setLinkMode(true); }
+      if (key === 'escape') setLinkMode(false);
+    });
+
+    // init
+    render();
+    setStatus('JS OK');
+  } catch (err) {
+    console.error(err);
+    setStatus("ERRORE: " + (err && err.message ? err.message : err));
+    alert("Errore JS: " + (err && err.message ? err.message : err));
+  }
+})();
+</script>
+</body>
+</html>
