@@ -460,9 +460,10 @@
     setStatus("Esportato JSON.");
   }
 
- function exportHTML() {
+function exportHTML() {
   var state = JSON.stringify(getState(), null, 2);
 
+  // Mettiamo il JSON in un TEXTAREA per evitare qualsiasi problema con </script>
   var html =
     '<!doctype html>' +
     '<html lang="it">' +
@@ -473,17 +474,17 @@
     '</head>' +
     '<body>' +
     '<h3>Mappa esportata</h3>' +
-    '<p>Apri questo file e importalo nell\'app.</p>' +
-    '<script type="application/json" id="popplet_export_data">' +
-    state.replace(/<\/script>/gi, '<\\/script>') +
-    '</script>' +
+    '<p>Importa questo file nell\'app con il pulsante Importa.</p>' +
+    '<textarea id="popplet_export_data" style="display:none;">' +
+    state +
+    '</textarea>' +
     '</body>' +
     '</html>';
 
-  var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-  var name = 'mappa_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.html';
+  var blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  var name = "mappa_" + new Date().toISOString().slice(0,19).replace(/:/g,'-') + ".html";
   downloadBlob(name, blob);
-  setStatus('Esportato HTML.');
+  setStatus("Esportato HTML.");
 }
 
   function applyState(state) {
