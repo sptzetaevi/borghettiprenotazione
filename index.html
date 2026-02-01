@@ -3,8 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-
-<!-- TITOLO SCHEDA BROWSER -->
 <title>Prenotazione sportello TIC di Carlotta Borghetti</title>
 
 <style>
@@ -68,6 +66,7 @@
     align-items: center;
     justify-content: center;
     padding: 12px;
+    z-index: 9999;
   }
 
   .modal-content {
@@ -105,18 +104,29 @@
 
   .error { color: #b00020; }
   .ok { color: #0a7a0a; }
+
+  /* UX: riga di caricamento */
+  .loading-row {
+    color: #555;
+    font-style: italic;
+  }
+  .small-note {
+    margin: 6px 0 0;
+    color: #666;
+    font-size: 13px;
+  }
 </style>
 </head>
 
 <body>
 
-<!-- TITOLO VISIBILE -->
 <h2>Prenotazione sportello TIC di Carlotta Borghetti</h2>
 
 <p>
-  Gli slot verdi sono prenotabili.  
-  Gli slot gialli non sono più prenotabili perché entro 24 ore.  
+  Gli slot verdi sono prenotabili.<br>
+  Gli slot gialli non sono più prenotabili perché entro 24 ore.
 </p>
+<p class="small-note" id="cacheNote" style="display:none;"></p>
 
 <table id="slots">
   <thead>
@@ -127,7 +137,10 @@
       <th>Azione</th>
     </tr>
   </thead>
-  <tbody></tbody>
+  <tbody>
+    <!-- Caricamento immediato (placeholder) -->
+    <tr class="loading-row"><td colspan="4">Caricamento…</td></tr>
+  </tbody>
 </table>
 
 <!-- MODALE PRENOTAZIONE -->
@@ -146,8 +159,7 @@
 
     <label>Gruppo
       <select id="group">
-        <option>E secondo grado</option>
-        <option>F secondo grado</option>
+        <option>E secondo grado</option><option>F secondo grado</option>
       </select>
     </label>
 
@@ -165,7 +177,8 @@ const API = "https://script.google.com/macros/s/AKfycbzAsv3Xb_4ybrHmBv3ZR3nw0J0Q
 
 let selectedRow = null;
 
-const tbody = document.querySelector("#slots tbody");
+const table = document.getElementById("slots");
+const tbody = table.querySelector("tbody");
 const modal = document.getElementById("modal");
 const slotInfo = document.getElementById("slotInfo");
 const modalStatus = document.getElementById("modalStatus");
@@ -174,100 +187,123 @@ const emailInput = document.getElementById("email");
 const groupSelect = document.getElementById("group");
 const confirmBtn = document.getElementById("confirmBtn");
 const cancelBtn = document.getElementById("cancelBtn");
+const cacheNote = document.getElementById("cacheNote");
 
+// Escape HTML via createElement (robusto + compatibile)
+const _escDiv = document.createElement("div");
 function escapeHtml(s) {
-  return (s || "")
-    .toString()
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+  _escDiv.textContent = (s == null) ? "" : String(s);
+  return _escDiv.innerHTML;
 }
 
 function groupLetter(g) {
   if (!g) return "";
-  g = g.toUpperCase();
-  if (g.startsWith("F")) return "F";
+  g = String(g).toUpperCase();
   if (g.startsWith("E")) return "E";
+  if (g.startsWith("F")) return "F";
   return "";
 }
 
 function webexLink(url) {
   if (!url) return "—";
   const safe = escapeHtml(url);
-  return `<a href="${safe}" target="_blank">Vai alla stanza Webex per lo sportello</a>`;
+  return `<a href="${safe}" target="_blank" rel="noopener noreferrer">Vai alla stanza Webex per lo sportello</a>`;
 }
 
-  function formatDateIT(dateStr) {
+function formatDateIT(dateStr) {
   // atteso: YYYY-MM-DD
-  if (!dateStr || !dateStr.includes("-")) return dateStr;
-  const [y, m, d] = dateStr.split("-");
+  if (!dateStr || String(dateStr).indexOf("-") === -1) return dateStr;
+  const parts = String(dateStr).split("-");
+  if (parts.length !== 3) return dateStr;
+  const y = parts[0], m = parts[1], d = parts[2];
   return `${d}/${m}/${y}`;
 }
 
-function loadSlots() {
-  fetch(API + "?action=list")
-    .then(r => r.json())
-    .then(data => {
-      tbody.innerHTML = "";
+// Rendering super-rapido: costruisce tutte le righe in una sola volta
+function renderSlots(slots, fromCache=false, cacheAgeMs=0) {
+  if (!Array.isArray(slots) || slots.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4">Nessuno slot disponibile.</td></tr>`;
+    cacheNote.style.display = "none";
+    return;
+  }
 
-      (data.slots || []).forEach(s => {
-        const slotDT = new Date(s.date + "T" + s.time);
-        const hoursDiff = (slotDT - new Date()) / 36e5;
+  const now = new Date();
+  let html = "";
 
-        const isExpired =
-          s.status === "OCCUPATO" &&
-          hoursDiff <= 24 &&
-          !s.group;
+  for (const s of slots) {
+    const slotDT = new Date(String(s.date) + "T" + String(s.time || "00:00"));
+    const hoursDiff = (slotDT - now) / 36e5;
 
-        const isBooked =
-          s.status === "OCCUPATO" && !isExpired;
+    const isExpired =
+      String(s.status || "").toUpperCase() === "OCCUPATO" &&
+      hoursDiff <= 24 &&
+      !s.group; // scaduto se entro 24h e non prenotato (group vuoto)
 
-        let statoText = "";
-        let statoClass = "";
-        let actionHtml = "—";
+    const isBooked =
+      String(s.status || "").toUpperCase() === "OCCUPATO" && !isExpired;
 
-        if (isExpired) {
-          statoText = "Scaduto";
-          statoClass = "stato-scaduto";
-        } else if (isBooked) {
-          const nome = s.name ? " – " + escapeHtml(s.name) : "";
-          statoText = "Occupato – " + groupLetter(s.group) + nome;
-          statoClass = "stato-occupato";
-          actionHtml = webexLink(s.webex);
-        } else {
-          statoText = "Prenotabile";
-          statoClass = "stato-libero";
-          actionHtml = `<button data-row="${s.row}" data-label="${escapeHtml(s.date)} ${escapeHtml(s.time)}">Prenota</button>`;
-        }
+    let statoText = "";
+    let statoClass = "";
+    let actionHtml = "—";
 
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${escapeHtml(formatDateIT(s.date))}</td>
-          <td>${escapeHtml(s.time)}</td>
-          <td class="${statoClass}">${statoText}</td>
-          <td>${actionHtml}</td>
-        `;
-        tbody.appendChild(tr);
-      });
+    if (isExpired) {
+      statoText = "Scaduto";
+      statoClass = "stato-scaduto";
+      actionHtml = "—";
+    } else if (isBooked) {
+      const nome = s.name ? " – " + escapeHtml(s.name) : "";
+      statoText = "Occupato – " + escapeHtml(groupLetter(s.group)) + nome;
+      statoClass = "stato-occupato";
+      actionHtml = webexLink(s.webex);
+    } else {
+      statoText = "Prenotabile";
+      statoClass = "stato-libero";
+      actionHtml = `<button type="button" data-row="${escapeHtml(s.row)}" data-label="${escapeHtml(formatDateIT(s.date))} ${escapeHtml(s.time)}">Prenota</button>`;
+    }
 
-      tbody.querySelectorAll("button[data-row]").forEach(b => {
-        b.onclick = () => openModal(b.dataset.row, b.dataset.label);
-      });
-    });
+    html += `
+      <tr>
+        <td>${escapeHtml(formatDateIT(s.date))}</td>
+        <td>${escapeHtml(s.time)}</td>
+        <td class="${statoClass}">${statoText}</td>
+        <td>${actionHtml}</td>
+      </tr>
+    `;
+  }
+
+  tbody.innerHTML = html;
+
+  // Attacca handler ai bottoni
+  tbody.querySelectorAll("button[data-row]").forEach(b => {
+    b.addEventListener("click", () => openModal(b.dataset.row, b.dataset.label));
+  });
+
+  if (fromCache) {
+    const sec = Math.max(1, Math.round(cacheAgeMs / 1000));
+    cacheNote.textContent = `Mostro una copia rapida (cache) di Prenotazione sportello TIC di Carlotta Borghetti. Aggiornamento in corso… (cache: ${sec}s)`;
+    cacheNote.style.display = "block";
+  } else {
+    cacheNote.style.display = "none";
+  }
 }
 
 function openModal(row, label) {
-  selectedRow = row;
+  selectedRow = parseInt(row, 10);
   slotInfo.textContent = "Stai prenotando: " + label;
+  modalStatus.textContent = "";
+  modalStatus.className = "status";
+  fullNameInput.value = "";
+  emailInput.value = "";
+  groupSelect.selectedIndex = 0;
   modal.style.display = "flex";
+  fullNameInput.focus();
 }
 
 function closeModal() {
   modal.style.display = "none";
   confirmBtn.disabled = false;
   confirmBtn.textContent = "Conferma";
+  selectedRow = null;
 }
 
 function confirmBooking() {
@@ -290,24 +326,85 @@ function confirmBooking() {
   })
   .then(r => r.json())
   .then(res => {
-    if (res.ok) {
+    if (res && res.ok) {
       modalStatus.textContent = "Prenotazione confermata";
       modalStatus.className = "status ok";
-      setTimeout(() => { closeModal(); loadSlots(); }, 500);
+      setTimeout(() => { closeModal(); loadSlots(true); }, 350);
     } else {
-      modalStatus.textContent = res.error;
+      modalStatus.textContent = (res && res.error) ? res.error : "Errore";
       modalStatus.className = "status error";
       confirmBtn.disabled = false;
       confirmBtn.textContent = "Conferma";
     }
+  })
+  .catch(() => {
+    modalStatus.textContent = "Errore di rete";
+    modalStatus.className = "status error";
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = "Conferma";
   });
 }
 
-cancelBtn.onclick = closeModal;
-confirmBtn.onclick = confirmBooking;
-modal.onclick = e => { if (e.target === modal) closeModal(); };
+const CACHE_KEY = "slots_cache_v1_" + API;
+function readCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+function writeCache(slots) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), slots }));
+  } catch {
+    // ignore
+  }
+}
 
-loadSlots();
+function loadSlots(softRefresh=false) {
+  // softRefresh=true: lascia tabella com'è e aggiorna in background
+  if (!softRefresh) {
+    tbody.innerHTML = `<tr class="loading-row"><td colspan="4">Caricamento…</td></tr>`;
+  }
+
+  fetch(API + "?action=list")
+    .then(r => r.json())
+    .then(data => {
+      const slots = (data && data.slots) ? data.slots : [];
+      writeCache(slots);
+      renderSlots(slots, false, 0);
+    })
+    .catch(err => {
+      console.error(err);
+      const cached = readCache();
+      if (cached && Array.isArray(cached.slots)) {
+        renderSlots(cached.slots, true, Date.now() - (cached.ts || Date.now()));
+      } else {
+        tbody.innerHTML = `<tr><td colspan="4">Errore nel caricamento: ${escapeHtml(err.message || err)}</td></tr>`;
+      }
+    });
+}
+
+// UX "istantanea":
+// 1) Se c'è cache, renderizza subito (0ms) e poi aggiorna
+// 2) Se non c'è cache, lascia il placeholder "Caricamento…"
+(function init() {
+  const cached = readCache();
+  if (cached && Array.isArray(cached.slots) && cached.slots.length) {
+    renderSlots(cached.slots, true, Date.now() - (cached.ts || Date.now()));
+    // aggiorna subito dopo il primo paint
+    requestAnimationFrame(() => loadSlots(true));
+  } else {
+    loadSlots(false);
+  }
+})();
+
+cancelBtn.addEventListener("click", closeModal);
+confirmBtn.addEventListener("click", confirmBooking);
+modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && modal.style.display === "flex") closeModal(); });
 </script>
 
 </body>
