@@ -146,7 +146,7 @@
 
     <label>Gruppo
       <select id="group">
-        <option>F secondo grado</option>
+        <option>E secondo grado</option>
         <option>F secondo grado</option>
       </select>
     </label>
@@ -188,9 +188,8 @@ function escapeHtml(s) {
 function groupLetter(g) {
   if (!g) return "";
   g = g.toUpperCase();
-  if (g.startsWith("K")) return "K";
-  if (g.startsWith("L")) return "L";
-  if (g.startsWith("D")) return "D";
+  if (g.startsWith("F")) return "F";
+  if (g.startsWith("E")) return "E";
   return "";
 }
 
